@@ -89,13 +89,83 @@
   m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
   ```
 
-到这里为止，我们已经创建了 DX12 所必备的几个环境，接下来我们会继续研究 `RenderTarget` `DepthStencil` `Vertex/Index Buffer` `Const Buffer` `Root Signature` `Shader` 和 `PipelineState`
+到这里为止，我们已经创建了 DX12 所必备的几个环境，接下来我们会继续研究 ：
+
+* `Render Target`
+* `Depth Stencil`
+* `Vertex/Index Buffer`
+* `Const Buffer`
+* `Root Signature`
+* `Shader Program`
+* `Pipeline State`
 
 ## 渲染的状态与Buffer
 
 ### ID3D12Resource
 
 ### DescriptorHeap 和 BufferView
+
+#### Root Signature
+
+* 从概念上来讲 Root Signature 更像是函数的形参，我们每一个 Shader Program 都有固定的输入参数，包括 CBV/SRV/UAV。但是只有在运行时我们才将真正的数据设置进去，Root Signature 就是 D3D12 用来定义这些输入参数的合集。
+* 说一个 Root Signature 是输入参数的和合集，从其主要参数是 `Root Parameter[]` 就可以明白。Root Parameter 可以分为三种 ： `Descriptor Table` / `Root Descriptor` / `Root Constants`。一个 Root Signature 就是由这三种参数组成的集合，与 Shader Program 组合以确定输入的位置。
+* 需要注意的一点是， Root Signature 只是定义了输入的形参，并不实际和 Shader Program 有关联，只有在 PipelineState 中才会进行关联。所以如果不同 Shader 的布局能够兼容，Root Signature 可以只有一个。另外切换一个 Root Signature 是开销很大的。
+* 为了性能考虑，单个 Root Signature 只可以设置 64 DWORDs 大小的。不同类型的 Parameter 占不同大小的
+  * Descriptor Table : 1 DWORD
+  * Root Descriptor : 2 DWORDs
+  * Root Constants : 1 DWORD per 32_bit constant
+* 以下为如何创建 Root Signature 的示例
+
+```cpp
+// set root parameter
+CD3DX12_ROOT_PARAMETER slotRootParameter[1];
+// parameter init as descriptor table
+CD3DX12_DESCRIPTOR_RANGE cbvTable;
+cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
+slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable);
+
+// create root signature which is array of parameter
+CD3DX12_ROOT_SIGNATURE_DESC signature_desc(1, slotRootParameter, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+ComPtr<ID3DBlob> serializedRootSig = nullptr;
+ComPtr<ID3DBlob> errorBlob = nullptr;
+HRESULT hr = D3D12SerializeRootSignature(&signature_desc, D3D_ROOT_SIGNATURE_VERSION_1, serializedRootSig.GetAddressOf(), errorBlob.GetAddressOf());
+ThrowIfFailed(m_device->CreateRootSignature(0, serializedRootSig->GetBufferPointer(), serializedRootSig->GetBufferSize(), IID_PPV_ARGS(m_rootSignature.GetAddressOf())));
+```
+
+* 接下来我们重点解释下 Root Parameter 的三种形式以及如何设置我们 Shader 需要的实参。
+
+##### Descriptor Table
+
+* 我们之前讲过 Descriptor Heap，而 Descriptor Table 类型的 Parameter 指代其在 Descriptor Heap 上的一段连续域。我们可以看一下如果我们 ParameterType 选为 Descriptor Table 那我们就需要填充一下参数。
+
+  ```cpp
+  typedef struct D3D12_ROOT_DESCRIPTOR_TABLE
+  {
+  UINT NumDescriptorRanges;
+  _Field_size_full_(NumDescriptorRanges)  const D3D12_DESCRIPTOR_RANGE *pDescriptorRanges;
+  } D3D12_ROOT_DESCRIPTOR_TABLE;
+  ```
+
+  NumDescriptorRanges 指定了我们总共有多少个 BufferView 需要被设置。 pDescriptorRanges 分别指定了是什么种类的 BufferView(CBV/SRV/UAV)，在 Shader 中又是从哪个寄存器开始，例如指定 CBV Type 并且设置 baseRegister 为0，在 HLSL 中就是 `(cBuffer cbA : register(b0))`。
+
+* 以下代码示例创建 3 个 CBV, 2 个 SRV , 1 个 UAV
+
+  ```cpp
+  CD3DX12_ROOT_PARAMETER slotRootParameter[1];
+  CD3DX12_DESCRIPTOR_RANGE descRanges[3];
+  // D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND 会自动帮我们定位偏移索引，如果将此宏去掉用手动的方式设置，分别是 0/3/5
+  descRanges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV,3,0,0,D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
+  descRanges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV,2,0,0,D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
+  descRanges[2].Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV,1,0,0,D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
+  slotRootParameter[0].InitAsDescriptorTable(3, descRanges);
+
+  // ---------------------------------Rendering--------------------------------------//
+  m_commandList->SetGraphicsRootDescriptorTable(0,baseDescriptorHandle); // baseDescriptor is CBV Handle then 2 CBV 2 SRV 1 UAV
+  ```
+
+##### Root Descriptor
+
+##### Root Constants
 
 ### Render Pipeline
 
